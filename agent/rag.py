@@ -1,4 +1,4 @@
-"""Retrieval layer: Chroma vector store + OpenAI embeddings.
+"""Retrieval layer: FAISS vector store + OpenAI embeddings.
 
 The corpus lives in ``data/docs/`` as markdown files. ``build_index`` chunks
 and embeds them once; ``get_vectorstore`` loads the persisted index for
@@ -8,11 +8,10 @@ app can call ``build_index`` lazily on first run.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import List
 
-from langchain_chroma import Chroma
+from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
@@ -21,7 +20,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # ---- paths ----------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DOCS_DIR = ROOT / "data" / "docs"
-DEFAULT_PERSIST_DIR = ROOT / "chroma_db"
+DEFAULT_PERSIST_DIR = ROOT / "faiss_db"
 EMBED_MODEL = "text-embedding-3-small"
 
 
@@ -34,9 +33,9 @@ def build_index(
     persist_dir: Path | str = DEFAULT_PERSIST_DIR,
     chunk_size: int = 1000,
     chunk_overlap: int = 150,
-) -> Chroma:
+) -> FAISS:
     """Load every markdown file under ``docs_dir``, chunk it, embed it,
-    and persist a Chroma collection to ``persist_dir``.
+    and persist a FAISS index to ``persist_dir``.
 
     Idempotent: callers can delete the directory to force a rebuild.
     """
@@ -66,24 +65,20 @@ def build_index(
     )
     chunks = splitter.split_documents(raw_docs)
 
-    vs = Chroma.from_documents(
-        chunks,
-        embedding=_embeddings(),
-        persist_directory=str(persist_dir),
-        collection_name="eu_ai_act",
-    )
+    vs = FAISS.from_documents(chunks, embedding=_embeddings())
+    vs.save_local(str(persist_dir))
     return vs
 
 
-def get_vectorstore(persist_dir: Path | str = DEFAULT_PERSIST_DIR) -> Chroma:
-    """Load the persisted Chroma collection for retrieval."""
-    return Chroma(
-        persist_directory=str(persist_dir),
-        embedding_function=_embeddings(),
-        collection_name="eu_ai_act",
+def get_vectorstore(persist_dir: Path | str = DEFAULT_PERSIST_DIR) -> FAISS:
+    """Load the persisted FAISS index for retrieval."""
+    return FAISS.load_local(
+        str(persist_dir),
+        _embeddings(),
+        allow_dangerous_deserialization=True,
     )
 
 
 def index_exists(persist_dir: Path | str = DEFAULT_PERSIST_DIR) -> bool:
     p = Path(persist_dir)
-    return p.exists() and any(p.iterdir())
+    return (p / "index.faiss").exists()

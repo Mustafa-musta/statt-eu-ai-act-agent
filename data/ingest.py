@@ -14,8 +14,7 @@ def main() -> None:
     print(f"Reading documents from: {DEFAULT_DOCS_DIR}")
     print(f"Persisting index to:    {DEFAULT_PERSIST_DIR}")
     vs = build_index()
-    count = vs._collection.count()  # type: ignore[attr-defined]
-    print(f"Done. {count} chunks indexed.")
+    print(f"Done. {vs.index.ntotal} chunks indexed.")
 
 
 if __name__ == "__main__":
