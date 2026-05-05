@@ -319,7 +319,7 @@ with col_docs:
                     unsafe_allow_html=True,
                 )
                 if st.button("📥 Load & Analyze", key=f"load_{i}", use_container_width=True):
-                    with st.spinner(f"Fetching and indexing "{title}"..."):
+                    with st.spinner(f"Fetching and indexing '{title}'..."):
                         text = _fetch_text(url)
                         if not text or len(text) < 100:
                             st.error("Could not extract enough text from this URL. Try another document.")
