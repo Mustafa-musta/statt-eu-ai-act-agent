@@ -172,21 +172,56 @@ def _multi_source_search(query: str, topic: str, sources: list[str]) -> list[dic
     return results[:MAX_DOCS]
 
 
+def _is_pdf(url: str, content_type: str = "") -> bool:
+    return url.lower().endswith(".pdf") or "application/pdf" in content_type
+
+
+def _extract_pdf(data: bytes) -> str:
+    try:
+        import io
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        pages = [page.extract_text() or "" for page in reader.pages]
+        return "\n\n".join(p.strip() for p in pages if p.strip())
+    except Exception:
+        return ""
+
+
 def _fetch_text(url: str) -> str:
+    import requests
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    # --- PDF path ---
+    if _is_pdf(url):
+        try:
+            r = requests.get(url, timeout=30, headers=headers)
+            r.raise_for_status()
+            return _extract_pdf(r.content)
+        except Exception:
+            return ""
+
+    # --- HTML path: try trafilatura first ---
     try:
         import trafilatura
         dl = trafilatura.fetch_url(url)
         if dl:
+            # trafilatura may have fetched a PDF redirect
+            if _is_pdf(url) or b"%PDF" in dl[:8]:
+                return _extract_pdf(dl if isinstance(dl, bytes) else dl.encode())
             text = trafilatura.extract(dl, include_tables=False)
             if text and len(text) > 200:
                 return text
     except Exception:
         pass
+
+    # --- HTML fallback: requests + simple stripper ---
     try:
-        import requests
-        from html.parser import HTMLParser
-        r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        r = requests.get(url, timeout=15, headers=headers)
         r.raise_for_status()
+        ct = r.headers.get("Content-Type", "")
+        if _is_pdf(url, ct):
+            return _extract_pdf(r.content)
+        from html.parser import HTMLParser
         class _P(HTMLParser):
             def __init__(self):
                 super().__init__(); self.out = []; self._skip = False
