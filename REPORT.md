@@ -1,114 +1,113 @@
 # Approach, Challenges, and Improvements
 
-## Policy area
+## Policy areas
 
-I chose the **EU AI Act (Regulation (EU) 2024/1689)** for three reasons.
-First, the primary text is authoritative and unambiguous, so retrieval
-chunks have clean provenance. Second, it produces the kind of question
-that benefits from retrieval rather than recall — specific articles,
-dates, FLOPs thresholds, fine amounts — which is what a RAG system
-should be good at. Third, it is recent enough that an occasional
-fall-through to live web search is genuinely useful (for enforcement
-news, Commission guidance, codes of practice), so the *agentic*
-tool-routing earns its keep instead of being decorative.
+The agent covers three policy domains — **Climate Change**, **Healthcare Reform**, and
+**Education Policy** — chosen because they each have a rich mix of official government
+documents, peer-reviewed research, and live news, making multi-source retrieval genuinely
+useful rather than decorative.
+
+Each topic has a distinct expert persona baked into the agent's system prompt, so the
+model frames retrieved content through the right conceptual vocabulary (e.g. NDCs and
+carbon budgets for climate; DRG payment and UHC for healthcare; PISA and achievement gaps
+for education).
 
 ## Architecture
 
-The application is a LangGraph ReAct-style agent over `gpt-4o-mini`
-with three tools:
+The application is a **dynamic fetch-and-RAG** system built on LangGraph and FAISS.
+There is no pre-built corpus: every document is fetched at query time from the live web.
 
-1. `search_policy_docs(query)` — Chroma + `text-embedding-3-small`,
-   `k=4`, top-similarity over a 7-document markdown corpus chunked at
-   1000 characters / 150 overlap on a heading-aware splitter.
-2. `lookup_document(filename)` — direct read of a full file when a
-   semantic-search snippet is too narrow.
-3. `web_search(query)` — Tavily, used as a fallback for queries the
-   corpus cannot answer.
+### Flow
 
-The agent loop runs until the model emits a final answer without
-further tool calls. The system prompt instructs the model to ground
-every claim, prefer the corpus, fall back to the web only when needed,
-and cite sources inline (`[Source: …]` / `[Web: …]`). The Streamlit UI
-exposes the tool-call trace in an expander so a reviewer can see
-exactly which tool fired for each query — that is the visible
-demonstration of agentic behaviour the spec asks for.
+1. **Topic + source selection** — the user picks one of three topics and one or more
+   source modes (Government & Official, News & Media, Wikipedia).
+2. **Scoped document search** — a Tavily search is issued with the topic name
+   prepended to the user's query and, for government mode, domain-restricted to
+   authoritative sites (unfccc.int, who.int, ed.gov, …).
+3. **Preview** — the user can fetch and inspect the first 2 000 characters of any
+   result before committing.
+4. **Load** — clicking *Add to Analysis* fetches the full document (PDF via pypdf,
+   HTML via trafilatura), chunks it (800 chars / 100 overlap), embeds it with
+   `text-embedding-3-small`, and merges the new FAISS index into the shared index.
+   Up to six documents can be loaded simultaneously.
+5. **Q&A** — a LangGraph ReAct agent with one tool (`search_document`) retrieves the
+   top-5 passages and answers strictly from retrieved text, citing the source document
+   inline. If the answer is not present it says so and prompts the user to load more
+   documents.
+
+### Agent
+
+- Model: `gpt-4o-mini` (temperature 0)
+- Tool: `search_document(query)` — FAISS similarity search over the combined index, k=5
+- System prompt: topic-expert persona + strict document-only rule
+  ("treat yourself as a reader who has only ever seen these documents")
+- Not-found response: *"Not found in the loaded documents. I can search more documents —
+  use the Find Documents panel to add additional sources."*
 
 ## Strengths
 
-- **Multi-tool routing.** A vanilla RAG pipeline always retrieves; this
-  agent retrieves only when retrieval helps. For "have there been any
-  recent EU AI Act enforcement actions?" the agent skips the corpus and
-  calls `web_search`. For "what is the maximum fine for breaching
-  Article 5?" it calls only `search_policy_docs`.
-- **Cited answers.** Every response includes inline source markers,
-  traceable to specific files in `data/docs/` or to web URLs.
-- **Cheap to run.** GPT-4o-mini at $0.15 / $0.60 per million input /
-  output tokens, plus `text-embedding-3-small` at $0.02 per million,
-  plus Tavily's free tier — total cost across development and demo is
-  well under $1.
-- **Free deployment path.** Streamlit Community Cloud runs the whole
-  app at $0/month after the small per-query LLM cost.
-- **Graceful degradation.** Missing `TAVILY_API_KEY`? The agent still
-  works — the `web_search` tool is simply not registered.
+- **Dynamic corpus.** No corpus curation or re-ingest pipeline needed — the user
+  controls exactly which documents are in scope.
+- **Multi-source, multi-document.** Government reports, news articles, and Wikipedia
+  can be searched simultaneously and combined into a single shared index.
+- **PDF support.** pypdf handles government reports and research papers that are
+  served as PDFs, which are the majority of authoritative policy documents.
+- **Topic-expert personas.** The agent interprets retrieved text through domain
+  vocabulary (carbon markets, DRG payment, PISA) rather than as a generic reader.
+- **Strict grounding.** The agent is forbidden from using training knowledge to fill
+  gaps, which reduces hallucination in a fact-sensitive policy context.
+- **Preview before load.** Users can inspect document content before committing an
+  embedding API call.
+- **Source provenance.** Every result card and loaded-document badge shows which
+  source mode it came from, maintaining clear attribution.
 
 ## Limitations
 
-- **Numerical fidelity.** Even with retrieval, the model occasionally
-  paraphrases fines or thresholds. For legal use a stricter regime
-  (extractive answering for numerical fields, or constrained generation
-  with a regex schema for amounts and dates) would be safer.
-- **No reranker.** Top-k similarity over seven documents is fine; at
-  production scale a cross-encoder reranker (Cohere Rerank, or
-  `bge-reranker-large`) would meaningfully improve precision against
-  legal language where exact phrasing matters.
-- **No evaluation harness.** I sanity-tested ~15 queries by hand. A
-  production system needs a held-out QA set with metrics for
-  faithfulness, answer relevance, and tool-selection accuracy (RAGAS
-  or a custom rubric).
-- **Single-turn agent calls.** The Streamlit UI keeps message history
-  visually but each `agent.invoke` is independent. True multi-turn
-  memory needs LangGraph's `MemorySaver` checkpointer keyed by
-  thread id.
-- **Brittle web fallback.** Tavily returns snippets, not full pages.
-  For deeper web-grounded answers, fetching and re-chunking the top web
-  result before passing it to the LLM would produce more reliable
-  citations.
-- **Static corpus.** The seven documents are a snapshot. Real-world use
-  needs a re-ingest pipeline triggered by changes to authoritative
-  sources (EUR-Lex, Commission guidance pages).
+- **Tavily snippet depth.** Tavily returns clean snippets but not always the complete
+  document. Very long PDFs may be truncated by pypdf if the server enforces download
+  limits.
+- **No reranker.** Top-k similarity is adequate for focused queries; a cross-encoder
+  reranker would improve precision when six heterogeneous documents are loaded.
+- **Session-only memory.** Loaded documents and the FAISS index live in Streamlit
+  session state and are lost on page refresh. A persistent user workspace would
+  require a server-side store.
+- **Single-turn agent calls.** Each `agent.invoke` is independent. True multi-turn
+  memory across conversation turns requires LangGraph's `MemorySaver` checkpointer.
+- **No evaluation harness.** Answers are validated manually. A production system needs
+  a QA set with RAGAS faithfulness / answer-relevance metrics.
+- **Rebuild cost on removal.** Removing one document from the six-document index
+  triggers a full re-embedding of all remaining documents (no FAISS delete API).
 
 ## Improvements for production
 
 | Area | Change |
-| --- | --- |
-| Retrieval quality | Hybrid search (BM25 + dense, RRF), cross-encoder reranker |
-| Evaluation | Continuously graded QA set; RAGAS faithfulness / answer relevance; tool-selection accuracy as a first-class metric |
-| Observability | Langfuse or LangSmith for traces, latency, cost, prompt-version tracking |
-| Caching | Semantic cache (e.g. GPTCache) — for a public chatbot the largest single cost saver |
-| Guardrails | Off-topic detection, jailbreak resistance, refusal pattern for legal-advice queries |
-| Streaming | Token streaming in Streamlit improves perceived latency at zero accuracy cost |
-| Vector store | Migrate from local Chroma to pgvector or Pinecone with metadata filtering and per-document ACLs |
-| Authn / authz | If extended to proprietary policy corpora, retrieval results must be filtered by user entitlements |
-| Model tiering | Route legal/numerical questions to a stronger model (Claude Sonnet, GPT-4o); keep mini for routine retrieval — a small query classifier in front of the agent |
-| Re-ingest | Scheduled pipeline that watches authoritative sources and re-chunks/embeds on change |
-| Cost monitoring | Per-tenant token accounting and rate-limiting |
+|---|---|
+| Retrieval quality | Hybrid search (BM25 + dense, RRF fusion), cross-encoder reranker |
+| Evaluation | Continuously graded QA set; RAGAS faithfulness / relevance; tool-selection accuracy |
+| Observability | LangSmith or Langfuse for traces, latency, cost, and prompt-version tracking |
+| Persistence | Save loaded documents and FAISS index to object storage (S3 / GCS) per user session |
+| Streaming | Token streaming in Streamlit for lower perceived latency |
+| Caching | Semantic cache (GPTCache) — largest single cost saver for repeated queries |
+| PDF quality | OCR fallback (pytesseract) for scanned PDFs that pypdf cannot extract |
+| Model tiering | Route numerical / legal questions to a stronger model; keep mini for routine retrieval |
+| Authn / authz | If extended to proprietary corpora, filter retrieval results by user entitlements |
+| More topics | Modular TOPICS config makes adding new domains (defence, housing, trade) trivial |
 
 ## Cost envelope
 
-For the take-home itself (development plus reviewer demo, ~100 queries
-at ~3K input / ~500 output tokens each): under $0.10 for LLM, free for
-Tavily, free for Streamlit Cloud — well under $1 in total.
+Per-session cost (loading 3 documents, ~20 queries):
 
-For a small production deployment (1,000 user queries/month with two
-search calls each): ~$3–5/month at GPT-4o-mini, $0–$8/month for Tavily,
-$0 for Streamlit Cloud — call it under $15/month all-in. Scaling to
-100K queries/month is dominated by LLM costs (~$300/month at
-GPT-4o-mini) and is the point at which a semantic cache + reranker
-combination starts paying for itself.
+| Component | Cost |
+|---|---|
+| Embeddings (3 docs × ~50 chunks × 800 tokens) | ~$0.002 |
+| LLM (20 queries × ~3K input / 500 output tokens) | ~$0.006 |
+| Tavily (a few searches) | Free tier |
+| **Total per session** | **< $0.01** |
+
+For 1 000 sessions/month: ~$10 all-in at current GPT-4o-mini pricing.
 
 ## Time spent
 
-Roughly 3.5 hours: 30 min corpus curation, 60 min RAG plus agent and
-tools, 30 min Streamlit UI plus CLI, 30 min deployment configuration
-and secrets handling, 30 min report and README, 30 min testing and
-polish.
+Roughly 5 hours: 45 min architecture design, 60 min agent + RAG layer, 60 min Streamlit
+UI redesign (multi-doc, multi-source, preview), 30 min PDF support and source scoping,
+30 min deployment and secrets handling, 30 min report and README, 15 min testing.

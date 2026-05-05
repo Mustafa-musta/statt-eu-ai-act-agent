@@ -146,17 +146,25 @@ def _domains_for(source: str, topic: str) -> list[str] | None:
     return None
 
 
+def _scoped_query(query: str, topic: str) -> str:
+    """Ensure the topic name is part of the search query."""
+    if topic.lower() in query.lower():
+        return query
+    return f"{topic} {query}"
+
+
 def _multi_source_search(query: str, topic: str, sources: list[str]) -> list[dict]:
     from tavily import TavilyClient
     key = os.environ.get("TAVILY_API_KEY", "")
     if not key:
         return []
     client = TavilyClient(api_key=key)
+    scoped = _scoped_query(query, topic)
     per_src = max(2, MAX_DOCS // len(sources))
     seen: set[str] = set()
     results: list[dict] = []
     for src in sources:
-        kwargs: dict = {"query": query, "max_results": per_src + 1}
+        kwargs: dict = {"query": scoped, "max_results": per_src + 1}
         domains = _domains_for(src, topic)
         if domains:
             kwargs["include_domains"] = domains
@@ -351,7 +359,12 @@ col_docs, col_chat = st.columns([1, 1], gap="large")
 # ---------------------------------------------------------------------------
 
 with col_docs:
-    st.markdown("### 📑 Find Documents")
+    st.markdown(
+        f"### 📑 Find Documents — "
+        f"<span style='color:{color}'>{topic_meta['icon']} {st.session_state.active_topic}</span>",
+        unsafe_allow_html=True,
+    )
+    st.caption("Search is scoped to the selected topic. Switch topics in the sidebar.")
     remaining = MAX_DOCS - len(st.session_state.loaded_docs)
     if remaining == 0:
         st.info(f"Maximum of {MAX_DOCS} documents loaded. Remove one to add more.")

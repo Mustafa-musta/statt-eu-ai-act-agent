@@ -1,124 +1,127 @@
-# EU AI Act Policy Agent
+# Policy Research Agent
 
-Agentic RAG application that answers questions about the **EU AI Act**
-(Regulation (EU) 2024/1689) using a small curated corpus of policy
-documents, with an optional live web-search fallback.
+An agentic, multi-document RAG application for researching public policy topics.
+Users select a topic, choose sources, discover documents from the live web, load up to six
+of them into a shared vector index, and ask questions that are answered strictly from the
+loaded document text.
 
 Built for the Statt Full-Stack ML Engineer take-home.
 
+## Topics
+
+| Topic | Icon | Scope |
+|---|---|---|
+| Climate Change | 🌍 | IPCC reports, NDCs, carbon pricing, net-zero pathways |
+| Healthcare Reform | 🏥 | UHC, insurance design, pharmaceutical pricing, WHO/NIH |
+| Education Policy | 📚 | PISA/TALIS, curriculum, funding equity, UNESCO SDG-4 |
+
 ## Architecture
 
-The agent is a LangGraph ReAct-style agent driving GPT-4o-mini, with
-three tools. It decides per-query which tools to call — that is the
-"agentic" piece, distinct from a fixed retrieve-then-generate pipeline.
-
 ```
-                ┌─────────────────────────────┐
-   user query ─►│  ReAct agent (gpt-4o-mini)  │── final answer + citations
-                └──────────┬──────────────────┘
-                           │ tool calls
-        ┌──────────────────┼─────────────────────┐
-        ▼                  ▼                     ▼
-  search_policy_docs   lookup_document      web_search
-  (Chroma + OpenAI     (full markdown       (Tavily, fallback
-   embeddings)          file by name)        for current events)
+User selects topic + source(s)
+        │
+        ▼
+Tavily search (topic-scoped query)
+        │
+        ▼
+Document result cards (title · URL · snippet · source badge)
+        │  👁️ Preview  │  📥 Add to Analysis
+        ▼
+trafilatura / pypdf content extraction
+        │
+        ▼
+In-memory FAISS index  ──merge──▶  Combined index (up to 6 docs)
+        │
+        ▼
+LangGraph ReAct agent (gpt-4o-mini)
+  └─ search_document(query)  →  top-5 passages from combined index
+        │
+        ▼
+Answer grounded only in retrieved passages + inline citations
 ```
 
-The corpus is seven hand-curated markdown documents covering:
-overview, risk classification, prohibited practices, high-risk systems,
-GPAI obligations, penalties, and the implementation timeline. See
-`data/docs/`.
+### Agent design
+
+The agent is a LangGraph `create_react_agent` with a **topic-specific expert persona**:
+
+- **Climate Change** — climate policy analyst fluent in IPCC AR6, NDCs, carbon markets, 1.5 °C pathways
+- **Healthcare Reform** — health systems researcher versed in UHC, DRG payment, pharmaceutical pricing
+- **Education Policy** — comparative education specialist who knows PISA/TALIS, Title I, achievement gaps
+
+The agent has one tool — `search_document(query)` — and is instructed to answer **only from retrieved passages**. If the documents do not contain the answer it responds: *"Not found in the loaded documents. I can search more documents."*
+
+### Source modes
+
+| Source | Restriction |
+|---|---|
+| 🏛️ Government & Official | Domain-restricted to topic-specific government sites (unfccc.int, who.int, ed.gov, ec.europa.eu, …) |
+| 📰 News & Media | Unrestricted Tavily search |
+| 📖 Wikipedia | Restricted to en.wikipedia.org |
+
+Multiple sources can be selected simultaneously; results are merged and deduplicated.
+
+### Document handling
+
+- URLs ending in `.pdf` or returning `Content-Type: application/pdf` are extracted with **pypdf**
+- HTML pages are extracted with **trafilatura** (clean-text extraction), with a plain-HTML fallback
+- Each fetched document is chunked (800 chars / 100 overlap) and embedded with `text-embedding-3-small`
+- FAISS indices are merged in-place as documents are added; removing a document triggers a full rebuild
 
 ## Setup
 
 ```bash
 git clone <this-repo>
-cd Statt_Full_Stack_TakeHome
+cd statt-eu-ai-act-agent
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env  # then fill in your keys
-python -m data.ingest # build the vector store (one-time)
+cp .env.example .env   # fill in your keys
 ```
 
 Required keys:
 
-- `OPENAI_API_KEY` — sign up at https://platform.openai.com. Total cost
-  for development plus reviewer demo is well under $1 with GPT-4o-mini.
-- `TAVILY_API_KEY` — sign up at https://tavily.com. The free tier
-  (1,000 searches/month) easily covers takehome usage. Optional: if you
-  omit the key, the `web_search` tool is silently disabled.
+- `OPENAI_API_KEY` — embeddings (`text-embedding-3-small`) + LLM (`gpt-4o-mini`)
+- `TAVILY_API_KEY` — document search (free tier: 1,000 searches/month)
 
 ## Run
 
-CLI:
-
-```bash
-python cli.py
-```
-
-Streamlit UI:
-
 ```bash
 streamlit run app.py
+# or
+python app.py
 ```
 
-Open http://localhost:8501 in your browser. The UI shows a tool-call
-trace under each answer so you can see exactly which tool the agent
-chose.
+Open http://localhost:8501
 
-## Deploy (free) — Streamlit Community Cloud
+## Deploy — Streamlit Community Cloud
 
-1. Push this repo to **GitHub** (it can be public; secrets stay out of
-   the code thanks to `.gitignore` and `st.secrets`).
-2. Go to https://share.streamlit.io and click **New app**.
-3. Pick the repo, branch `main`, and entrypoint `app.py`.
-4. Open **Advanced settings → Secrets** and paste:
-
+1. Push to GitHub
+2. Go to https://share.streamlit.io → **New app** → pick repo / branch `main` / `app.py`
+3. **Advanced settings → Secrets**:
    ```toml
    OPENAI_API_KEY = "sk-..."
    TAVILY_API_KEY = "tvly-..."
    ```
+4. Click **Deploy** (~2 min)
 
-5. Click **Deploy**. After ~2 minutes you get a public
-   `https://<your-app>.streamlit.app` URL.
-
-The vector index is built lazily on the first request — no extra build
-step is required on the deploy side. `chroma_db/` is gitignored, so each
-fresh container builds it once and reuses it for the lifetime of the
-container.
+No pre-built index — the vector store is built on demand from whatever documents the user loads.
 
 ## Project layout
 
 ```
 .
-├── app.py                       Streamlit UI
-├── cli.py                       CLI fallback
+├── app.py                      Streamlit UI (search · preview · load · Q&A)
 ├── requirements.txt
 ├── README.md
-├── REPORT.md                    1–2 page reflection
+├── REPORT.md
 ├── .env.example
 ├── .gitignore
+├── runtime.txt / .python-version
 ├── .streamlit/config.toml
 ├── agent/
-│   ├── agent.py                 LangGraph ReAct agent
-│   ├── tools.py                 search_policy_docs, lookup_document, web_search
-│   └── rag.py                   Chroma + OpenAI embeddings
+│   ├── agent.py               Topic-expert ReAct agent factory
+│   ├── tools.py               make_search_tool() — FAISS-scoped search
+│   └── rag.py                 build_doc_index() + persistent index helpers
 └── data/
-    ├── ingest.py                builds the vector index
-    └── docs/                    7 EU AI Act markdown documents
+    ├── ingest.py
+    └── docs/                  Legacy EU AI Act corpus (not used in main flow)
 ```
-
-## Example queries
-
-- *"What practices are prohibited under Article 5?"* → corpus only.
-- *"When do GPAI obligations apply?"* → corpus only.
-- *"What's the maximum fine for breaching Article 5?"* → corpus only.
-- *"How does the Act define a systemic-risk GPAI model?"* → corpus only.
-- *"Which use cases count as high-risk under Annex III?"* → corpus only.
-- *"Have there been any recent EU AI Act enforcement actions?"* →
-  agent should call `web_search`.
-
-## Notes
-
-The application is a research tool, not legal advice. The agent is
-prompted to add a one-line caveat when asked for legal advice.
