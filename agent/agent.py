@@ -46,13 +46,15 @@ factual content and add one sentence noting the limitation.
 """
 
 
-def build_agent(model: str = DEFAULT_MODEL, temperature: float = 0.0):
+def build_agent(model: str = DEFAULT_MODEL, temperature: float = 0.0, gov_only: bool = False):
     """Build and return a LangGraph ReAct agent.
 
     The returned object is invoked as::
 
         result = agent.invoke({"messages": [("user", "your question")]})
         answer = result["messages"][-1].content
+
+    Pass gov_only=True to restrict web search to official EU sources.
     """
     llm = ChatOpenAI(model=model, temperature=temperature)
-    return create_react_agent(llm, get_tools(), prompt=SYSTEM_PROMPT)
+    return create_react_agent(llm, get_tools(gov_only=gov_only), prompt=SYSTEM_PROMPT)

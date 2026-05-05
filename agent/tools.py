@@ -66,31 +66,61 @@ def lookup_document(filename: str) -> str:
 # Tool 3 — live web search (Tavily)
 # ---------------------------------------------------------------------------
 
-# Lazy import so the rest of the system still works if Tavily isn't installed
-# or the key isn't set.
-try:
-    from langchain_tavily import TavilySearch as TavilySearchResults
+GOV_DOMAINS = [
+    "ec.europa.eu",
+    "eur-lex.europa.eu",
+    "europarl.europa.eu",
+    "consilium.europa.eu",
+    "enisa.europa.eu",
+    "digital-strategy.ec.europa.eu",
+    "artificialintelligenceact.eu",
+    "aiaobservatory.eu",
+]
 
-    _tavily = TavilySearchResults(
+_TAVILY_DESC_ALL = (
+    "Search the live web for current information. Use ONLY when the "
+    "local corpus does not contain the answer (e.g., very recent news, "
+    "enforcement actions after the corpus was written, or topics "
+    "outside the EU AI Act). Each result includes a URL — cite it."
+)
+
+_TAVILY_DESC_GOV = (
+    "Search official EU government and institutional websites for current "
+    "information. Restricted to ec.europa.eu, eur-lex.europa.eu, "
+    "europarl.europa.eu, and related official sources. Use ONLY when the "
+    "local corpus does not contain the answer. Each result includes a URL — cite it."
+)
+
+_HAS_TAVILY = False
+_tavily_all = None
+_tavily_gov = None
+
+try:
+    from langchain_tavily import TavilySearch
+
+    _tavily_all = TavilySearch(
         max_results=3,
         name="web_search",
-        description=(
-            "Search the live web for current information. Use ONLY when the "
-            "local corpus does not contain the answer (e.g., very recent news, "
-            "enforcement actions after the corpus was written, or topics "
-            "outside the EU AI Act). Each result includes a URL — cite it."
-        ),
+        description=_TAVILY_DESC_ALL,
+    )
+    _tavily_gov = TavilySearch(
+        max_results=3,
+        name="web_search",
+        include_domains=GOV_DOMAINS,
+        description=_TAVILY_DESC_GOV,
     )
     _HAS_TAVILY = bool(os.getenv("TAVILY_API_KEY"))
-except Exception:  # pragma: no cover
-    _tavily = None
-    _HAS_TAVILY = False
+except Exception:
+    pass
 
 
-def get_tools() -> list:
-    """Return the active tool list. Web search is included only when a
-    Tavily API key is configured."""
+def get_tools(gov_only: bool = False) -> list:
+    """Return the active tool list.
+
+    Web search is included only when a Tavily API key is configured.
+    Pass gov_only=True to restrict web search to official EU institutions.
+    """
     tools = [search_policy_docs, lookup_document]
-    if _HAS_TAVILY and _tavily is not None:
-        tools.append(_tavily)
+    if _HAS_TAVILY:
+        tools.append(_tavily_gov if gov_only else _tavily_all)
     return tools
