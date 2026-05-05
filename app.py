@@ -213,7 +213,7 @@ def _add_document(text: str, title: str, url: str, source: str) -> None:
     else:
         st.session_state.vs.merge_from(new_vs)
     st.session_state.loaded_docs.append({"title": title, "url": url, "source": source})
-    st.session_state.agent = build_doc_agent(st.session_state.vs)
+    st.session_state.agent = build_doc_agent(st.session_state.vs, topic=st.session_state.active_topic)
 
 
 def _remove_document(url: str) -> None:
@@ -233,7 +233,7 @@ def _remove_document(url: str) -> None:
     for u, (t, ti) in items[1:]:
         vs.merge_from(build_doc_index(t, title=ti, source_url=u))
     st.session_state.vs = vs
-    st.session_state.agent = build_doc_agent(vs)
+    st.session_state.agent = build_doc_agent(vs, topic=st.session_state.active_topic)
 
 # ---------------------------------------------------------------------------
 # API key guard
